@@ -27,6 +27,8 @@ from string import ascii_uppercase
 import Language # Language file
 lang = "english" # default language
 
+largeur, hauteur = 1920, 1080
+
 # ==================================== HUD ====================================
 class SystemHUD:
     """
@@ -45,11 +47,11 @@ class SystemHUD:
     
         self.root = tk.Tk()
         self.root.title("HUD System")
-        self.root.geometry("500x100+10+10")
+        self.root.geometry(f"{round(largeur * 0.26)}x{round(hauteur * 0.1)}+10+10") # "500x100+10+10"
         self.root.configure(bg="black")
         self.root.wm_attributes("-topmost", True)
         self.root.attributes("-alpha", 0.85)
-        self.root.wm_attributes("-transparentcolor", "black")
+        #self.root.wm_attributes("-transparentcolor", "black")
         self.root.overrideredirect(True)
 
         self.text = tk.Text(
@@ -201,6 +203,16 @@ def find_latest_journal():
 
     latest_file = max(journal_files, key=os.path.getmtime) # Retourne le fichier le plus récent (le dernier modifié)
     return latest_file
+
+def ScreenDimensions():
+    global largeur, hauteur
+
+    user32 = ctypes.windll.user32
+    user32.SetProcessDPIAware()  # éviter les problèmes de mise à l'échelle
+    largeur = user32.GetSystemMetrics(0)
+    hauteur = user32.GetSystemMetrics(1)
+
+    print(f"Résolution de l'écran principal : {largeur} x {hauteur}")
 
 # ==================================== SURVEILLANCE DU JOURNAL ====================================
 def monitor_journal(hud: SystemHUD):

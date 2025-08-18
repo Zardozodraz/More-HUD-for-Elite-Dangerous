@@ -33,6 +33,8 @@ import threading
 import Language # Language file
 lang = "english"
 
+largeur, hauteur = 1920, 1080
+
 # ====================== HUD DE STATS ======================
 
 class SessionHUD:
@@ -59,7 +61,7 @@ class SessionHUD:
         
         self.root = tk.Tk()
         self.root.title("HUD Session")
-        self.root.geometry("200x150+1710+10")
+        self.root.geometry(f"{round(largeur * 0.1)}x{round(hauteur * 0.14)}+1710+10") # "200x150+1710+10"
         self.root.configure(bg="black")
         self.root.wm_attributes("-topmost", True)
         self.root.attributes("-alpha", 0.85)

@@ -27,6 +27,8 @@ from string import ascii_uppercase
 import Language # Language file
 lang = "english" # default language
 
+largeur, hauteur = 1920, 1080
+
 interesting_keywords = [ # Penser à enlever "Thin ", "Thick " et "Hot " dans le resultats des requètes
     ("Carbon dioxyde", "High metal content world", [("Aleolda x2", "7M"), ("Osseus", "7M"), ("Tubus", "7M"), ("Clypeus x3", "7M-15M"), ("Stratum", "15M")]),
     ("Carbon dioxide-rich", "High metal content world", [("Aleolda x2", "7M"), ("Osseus", "7M"), ("Tubus", "7M"), ("Clypeus x3", "7M-15M"), ("Stratum", "15M")]),
@@ -87,11 +89,11 @@ class ExoBioHUD:
         
         self.root = tk.Tk()
         self.root.title("HUD Exo-Biology")
-        self.root.geometry("500x500+10+10")
+        self.root.geometry(f"{round(largeur * 0.26)}x{round(hauteur * 0.26)}+10+10") # "500x500+10+10"
         self.root.configure(bg="black")
         self.root.wm_attributes("-topmost", True)
         self.root.attributes("-alpha", 0.85)
-        self.root.wm_attributes("-transparentcolor", "black")
+        #self.root.wm_attributes("-transparentcolor", "black")
         self.root.overrideredirect(True)
         
         if fenetreDecalee == "True": # si le HUD des systèmes est lancé (avant)
