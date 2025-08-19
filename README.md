@@ -16,7 +16,7 @@ This project is a custom Heads-Up Display (HUD) for Elite Dangerous that provide
 
 ### Prerequisites
 
-- Python 3+
+- Python 3.13
 - Required modules:
   - `pygame`
   - `requests`

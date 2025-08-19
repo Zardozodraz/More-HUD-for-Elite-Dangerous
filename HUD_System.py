@@ -29,6 +29,18 @@ lang = "english" # default language
 
 largeur, hauteur = 1920, 1080
 
+def ctypeTaille():
+    global largeur, hauteur
+    
+    user32 = ctypes.windll.user32
+    user32.SetProcessDPIAware()  # éviter les problèmes de mise à l'échelle
+    largeur = user32.GetSystemMetrics(0)
+    hauteur = user32.GetSystemMetrics(1)
+
+    print(f"Résolution de l'écran principal : {largeur} x {hauteur}")
+
+ctypeTaille()
+
 # ==================================== HUD ====================================
 class SystemHUD:
     """
