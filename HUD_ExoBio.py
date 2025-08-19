@@ -109,7 +109,7 @@ class ExoBioHUD:
         self.root.overrideredirect(True)
         
         if fenetreDecalee == "True": # si le HUD des systèmes est lancé (avant)
-            self.root.geometry("500x500+10+120")
+            self.root.geometry(f"{round(largeur * 0.26)}x{round(hauteur * 0.26)}+10+{round(hauteur * 0.1) + 20}") # "500x500+10+120"
 
         self.text = tk.Text(
             self.root,
