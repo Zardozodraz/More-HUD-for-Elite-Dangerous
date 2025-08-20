@@ -181,6 +181,19 @@ class ExoBioHUD:
             self.text.delete("1.0", "end")
             self.text.insert("1.0", text_content)
             self.text.config(state="disabled")
+    
+    def apply_command_on_ui(self, cmd):
+        global lang
+        
+        if cmd == "HUD_Sys":
+            self.root.geometry(f"{round(largeur * 0.26)}x{round(hauteur * 0.26)}+10+{round(hauteur * 0.1) + 20}") # "500x500+10+120"
+        elif cmd == "HUD_Sys_Stop":
+            self.root.geometry(f"{round(largeur * 0.26)}x{round(hauteur * 0.26)}+10+10") # "500x500+10+10"
+
+        elif cmd == "english":
+            lang = "english"
+        elif cmd == "french":
+            lang = "french"
 
     def run(self):
         """
@@ -323,6 +336,13 @@ def monitor_journal(hud: ExoBioHUD):
                 continue
 
 # ==================================== MAIN ====================================
+def listen_commands(hud: ExoBioHUD):
+    for line in sys.stdin:
+        cmd = line.strip()
+        if not cmd:
+            continue
+        hud.root.after(0, hud.apply_command_on_ui, cmd)
+
 def main():
     """
     Entry point for the script.
@@ -346,6 +366,7 @@ def main():
         
     hud = ExoBioHUD(fenetreDecalee)
     threading.Thread(target=monitor_journal, args=(hud,), daemon=True).start()
+    threading.Thread(target=listen_commands, args=(hud,), daemon=True).start()
     
     hud.update("", "", "", "")
     hud.run()

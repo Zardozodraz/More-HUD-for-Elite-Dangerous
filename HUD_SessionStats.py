@@ -150,6 +150,14 @@ class SessionHUD:
         self.text.insert("1.0", text_content)
         self.text.config(state="disabled")
 
+    def apply_command_on_ui(self, cmd):
+        global lang
+        
+        if cmd == "english":
+            lang = "english"
+        elif cmd == "french":
+            lang = "french"
+
     def run(self):
         """
         Runs the Tkinter main loop to display the HUD.
@@ -247,6 +255,12 @@ def monitor_session(hud: SessionHUD):
                 continue
 
 # ====================== LANCEMENT ======================
+def listen_commands(hud: SessionHUD):
+    for line in sys.stdin:
+        cmd = line.strip()
+        if not cmd:
+            continue
+        hud.root.after(0, hud.apply_command_on_ui, cmd)
 
 def update_loop(hud: SessionHUD):
     """
@@ -279,6 +293,7 @@ def main():
 
     threading.Thread(target=monitor_session, args=(hud,), daemon=True).start()
     threading.Thread(target=update_loop, args=(hud,), daemon=True).start()
+    threading.Thread(target=listen_commands, args=(hud,), daemon=True).start()
 
     hud.run()
 

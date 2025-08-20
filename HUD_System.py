@@ -127,6 +127,14 @@ class SystemHUD:
         self.text.delete("1.0", "end")
         self.text.insert("1.0", text_content)
         self.text.config(state="disabled")
+    
+    def apply_command_on_ui(self, cmd):
+        global lang
+        
+        if cmd == "english":
+            lang = "english"
+        elif cmd == "french":
+            lang = "french"
 
     def run(self):
         """
@@ -266,6 +274,13 @@ def monitor_journal(hud: SystemHUD):
                 continue
 
 # ==================================== MAIN ====================================
+def listen_commands(hud: SystemHUD):
+    for line in sys.stdin:
+        cmd = line.strip()
+        if not cmd:
+            continue
+        hud.root.after(0, hud.apply_command_on_ui, cmd)
+
 def main():
     """
     Entry point for the script.
@@ -284,7 +299,8 @@ def main():
     
     hud = SystemHUD()
     threading.Thread(target=monitor_journal, args=(hud,), daemon=True).start()
-    
+    threading.Thread(target=listen_commands, args=(hud,), daemon=True).start()
+
     hud.update("", "")
     hud.run()
 

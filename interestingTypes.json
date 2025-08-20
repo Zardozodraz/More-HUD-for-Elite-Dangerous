@@ -1,26 +1,35 @@
 {
     "O (Blue-White) Star": true,
+
     "B (Blue-White) Star": true,
     "B (Blue-White super giant) Star": true,
+
     "A (Blue-White) Star": true,
     "A (Blue-White super giant) Star": true,
+
     "F (White) Star": false,
+
     "G (White-Yellow) Star": false,
     "G (White-Yellow super giant) Star": false,
+
     "K (Yellow-Orange) Star": false,
     "K (Yellow-Orange giant) Star": false,
+
     "M (Red dwarf) Star": false,
     "M (Red giant) Star": false,
     "M (Red super giant) Star": false,
+
     "L (Brown dwarf) Star": false,
     "T (Brown dwarf) Star": false,
-    "Y (Brown dwarf) Star": false,
+    "Y (Brown dwarf) Star": false,    
     "T Tauri Star": false,
+
     "Wolf-Rayet Star": true,
     "Wolf-Rayet N Star": true,
     "Wolf-Rayet NC Star": true,
     "Wolf-Rayet C Star": true,
     "Wolf-Rayet O Star": true,
+
     "CS Star": true,
     "C Star": true,
     "CN Star": true,
@@ -29,6 +38,7 @@
     "CHd Star": true,
     "MS-type Star": true,
     "S-type Star": true,
+
     "White Dwarf (D) Star": true,
     "White Dwarf (DA) Star": true,
     "White Dwarf (DAB) Star": true,
@@ -44,7 +54,9 @@
     "White Dwarf (DC) Star": true,
     "White Dwarf (DCV) Star": true,
     "White Dwarf (DX) Star": true,
+
     "Neutron Star": true,
+
     "Black Hole": true,
     "Supermassive Black Hole": true,
     "X": true,
@@ -52,23 +64,32 @@
     "Nebula": true,
     "StellarRemnantNebula": true,
 
+
+
     "Metal-rich body": false,
     "High metal content world": false,
+
     "Rocky body": false,
     "Rocky Ice world": false,
     "Icy body": false,
+
     "Earth-like world": true,
+
     "Water world": true,
     "Water giant": true,
     "Water giant with life": true,
+
     "Ammonia world": true,
+
     "Gas giant with water-based life": true,
     "Gas giant with ammonia-based life": true,
+
     "Class I gas giant": false,
     "Class II gas giant": false,
     "Class III gas giant": false,
     "Class IV gas giant": true,
     "Class V gas giant": true,
+
     "Helium-rich gas giant": true,
     "Helium gas giant": true
 }

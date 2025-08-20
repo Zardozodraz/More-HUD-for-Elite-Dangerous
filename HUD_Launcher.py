@@ -36,7 +36,8 @@ def lancer_systeme():
     """
     
     global sys_process
-    sys_process = subprocess.Popen(["python", "HUD_System.py", lang])
+    sys_process = subprocess.Popen(["python", "HUD_System.py", lang], stdin=subprocess.PIPE, text=True, encoding="utf-8", bufsize=1)
+    send_cmd_to_hud("HUD_Sys", "HUD_ExoBio")
 
 def arreter_systeme():
     """
@@ -47,6 +48,7 @@ def arreter_systeme():
     if sys_process and sys_process.poll() is None:
         sys_process.terminate() # ou .kill() si inefficace
         sys_process = None
+    send_cmd_to_hud("HUD_Sys_Stop", "HUD_ExoBio")
 
 
 def lancer_exobio(HUD_Systeme_running):
@@ -64,8 +66,8 @@ def lancer_exobio(HUD_Systeme_running):
         decalerFenetreExobio = "True"
     else:
         decalerFenetreExobio = "False"
-        
-    exobio_process = subprocess.Popen(["python", "HUD_ExoBio.py", lang, decalerFenetreExobio])
+    
+    exobio_process = subprocess.Popen(["python", "HUD_ExoBio.py", lang, decalerFenetreExobio], stdin=subprocess.PIPE, text=True, encoding="utf-8", bufsize=1)
 
 def arreter_exobio():
     """
@@ -84,7 +86,7 @@ def lancer_stats():
     """
     
     global stats_process
-    stats_process = subprocess.Popen(["python", "HUD_SessionStats.py", lang])
+    stats_process = subprocess.Popen(["python", "HUD_SessionStats.py", lang], stdin=subprocess.PIPE, text=True, encoding="utf-8", bufsize=1)
 
 def arreter_stats():
     """
@@ -95,6 +97,20 @@ def arreter_stats():
     if stats_process and stats_process.poll() is None:
         stats_process.terminate() # ou .kill() si inefficace
         stats_process = None
+
+
+def send_cmd_to_hud(value, targetHUD):
+    if targetHUD == "HUD_Sys" and sys_process and sys_process.poll() is None:
+        sys_process.stdin.write(value + "\n")
+        sys_process.stdin.flush()
+
+    elif targetHUD == "HUD_ExoBio" and exobio_process and exobio_process.poll() is None:
+        exobio_process.stdin.write(value + "\n")
+        exobio_process.stdin.flush()
+
+    elif targetHUD == "HUD_SessionStats" and stats_process and stats_process.poll() is None:
+        stats_process.stdin.write(value + "\n")
+        stats_process.stdin.flush()
 
 
 def Choose_lang(fenetre):
@@ -167,7 +183,11 @@ def Choose_lang(fenetre):
         fenetre.blit(text_English, text_English_rect)
         
         pygame.display.flip()
-    
+
+        send_cmd_to_hud(f"{chosen_Lang}", "HUD_System")
+        send_cmd_to_hud(f"{chosen_Lang}", "HUD_ExoBio")
+        send_cmd_to_hud(f"{chosen_Lang}", "HUD_SessionStats")
+
     return chosen_Lang
 
 def Choose_Interesting():
@@ -267,6 +287,9 @@ def run():
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 run = False
+                arreter_systeme()
+                arreter_exobio()
+                arreter_stats()
 
             elif event.type == pygame.MOUSEMOTION:
                 # Position de la souris
