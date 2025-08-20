@@ -106,13 +106,16 @@ class SessionHUD:
         }
 
     def make_click_through(self):
-        """
-        Makes the HUD window click-through using Windows API.
-        """
-        
-        hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
-        extended_style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
-        ctypes.windll.user32.SetWindowLongW(hwnd, -20, extended_style | 0x80000 | 0x20)
+        hwnd = self.root.winfo_id()  # pas de GetParent
+        GWL_EXSTYLE = -20
+        WS_EX_LAYERED = 0x80000
+        WS_EX_TRANSPARENT = 0x20
+
+        style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED | WS_EX_TRANSPARENT)
+
+        # Forcer la transparence (255 = opaque mais click-through activé)
+        ctypes.windll.user32.SetLayeredWindowAttributes(hwnd, 0, 255, 0x2)
 
     def update(self):
         """
