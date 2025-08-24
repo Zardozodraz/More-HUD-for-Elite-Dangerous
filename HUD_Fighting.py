@@ -27,6 +27,7 @@ from string import ascii_uppercase
 from datetime import datetime
 from dataclasses import dataclass
 import math
+from collections import deque
 
 ListVaisseaux = []  # Liste globale pour stocker les vaisseaux détectés
 
@@ -36,6 +37,10 @@ class Rates:
     rH_in: float = 1e-6  # perte coque joueur (%/s), évite la division par 0
     
 rates = Rates()
+
+# historiques (mémoire courte) — on garde juste les derniers échantillons
+player_history = deque(maxlen=5)      # éléments: (epoch_seconds, shield_fraction, hull_fraction)
+enemy_histories = {}                  # clé = nom_vaisseau -> deque des mêmes tuples
 
 @dataclass(frozen=True)
 class Params:
@@ -76,8 +81,8 @@ class Vaisseau:
         self.ShipType = ship_type
         self.Bounty = bounty
         
-        self.rS_out = 0.0
-        self.rH_out = 0.0
+        self.rateShield_out = 0.0
+        self.rateHull_out = 0.0
 
     def __str__(self):
         return f"{self.nom} ({self.PilotRank}), Bouclier: {self.ShieldHealth}, Coque: {self.HullHealth}, Type: {self.ShipType}, Bounty: {self.Bounty}"
@@ -163,8 +168,14 @@ def find_latest_journal():
 
 # ==================================== MAJ VAISSEAUX ====================================
 
-def maj_vaiseaux(nom_cible, PilotRank, ShieldHealth, HullHealth, ship_type, bounty):
-    global ListVaisseaux
+def maj_vaiseaux(nom_cible, PilotRank, ShieldHealth, HullHealth, ship_type, bounty, timestamp=None):
+    """
+    Met à jour (ou crée) l'objet Vaisseau et enregistre un échantillon horodaté
+    pour le calcul des vitesses.
+    timestamp : chaîne ISO provenant du journal (ex: "2025-08-03T16:39:32Z")
+    """
+    global ListVaisseaux, enemy_histories
+
     # normalisation en 0..1 si l'input est en pourcentage (>1)
     try:
         sh = float(ShieldHealth)
@@ -185,15 +196,27 @@ def maj_vaiseaux(nom_cible, PilotRank, ShieldHealth, HullHealth, ship_type, boun
             ListVaisseaux[i].ShipType = ship_type
             ListVaisseaux[i].Bounty = bounty
             is_modified = True
-            print(f"Vaisseau mis à jour : {ListVaisseaux[i]}")
+            # print(f"Vaisseau mis à jour : {ListVaisseaux[i]}")
+            break
+
     if not is_modified:
         vaisseau = Vaisseau(nom_cible, PilotRank, sh, hu, ship_type, bounty)
         ListVaisseaux.append(vaisseau)
-        print(f"Nouveau vaisseau détecté : {vaisseau}")
+        # print(f"Nouveau vaisseau détecté : {vaisseau}")
+
+    # --- enregistrement historique pour ce vaisseau ---
+    epoch = parse_timestamp(timestamp) if timestamp else time.time()
+    if nom_cible not in enemy_histories:
+        enemy_histories[nom_cible] = deque(maxlen=5)
+    enemy_histories[nom_cible].append((epoch, sh, hu))
 
 
-def maj_joueur(hull_health, shield_up):
-    global joueur
+def maj_joueur(hull_health, shield_up, timestamp=None):
+    """
+    Met à jour l'état joueur et enregistre un échantillon horodaté.
+    """
+    global joueur, player_history
+
     # normalize hull
     try:
         h = float(hull_health)
@@ -201,11 +224,17 @@ def maj_joueur(hull_health, shield_up):
             h = h / 100.0
     except (TypeError, ValueError):
         h = 1.0
+
     joueur.hull_health = h
     joueur.shield_up = bool(shield_up)
-    # best-effort pour shield_health : si shield_up True, assume 1.0 (on ne reçoit pas la valeur exacte)
     joueur.shield_health = 1.0 if joueur.shield_up else 0.0
+
+    # enregistrement historique
+    epoch = parse_timestamp(timestamp) if timestamp else time.time()
+    player_history.append((epoch, joueur.shield_health, joueur.hull_health))
+
     print(f"Joueur mis à jour : {joueur}")
+
 
 def cible_detruite(nom_cible_detruite):
     # Fonction pour traiter la destruction d'une cible
@@ -218,36 +247,89 @@ def cible_detruite(nom_cible_detruite):
 
 # ==================================== TRAITEMENT ====================================
 
-def parse_timestamp(timestamp):
-    dt = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%SZ")
-    minutes = dt.minute
-    secondes = dt.second
-    print(f"[INFO] Timestamp analysé : minutes: {minutes}, secondes: {secondes}")
-    return (minutes, secondes)
+def parse_timestamp(timestamp_iso):
+    """
+    Convertit un timestamp ISO '2025-08-03T16:39:32Z' en epoch (float seconds).
+    """
+    try:
+        dt = datetime.strptime(timestamp_iso, "%Y-%m-%dT%H:%M:%SZ")
+        epoch = dt.timestamp()
+        # debug optionnel :
+        # print(f"[DEBUG] parse_timestamp: {timestamp_iso} -> {epoch:.3f}")
+        return epoch
+    except Exception as e:
+        # fallback sur l'heure système si parsing échoue
+        # print(f"[WARN] parse_timestamp failed: {e} ; fallback to time.time()")
+        return time.time()
 
 
 def calcul_vitesse_degats():
     """
-    Implémentation minimale :
-    - évite les divisions par zéro en donnant des petits taux par défaut
-    - laisse les r*_out des vaisseaux à 0.0 (ils seront remplacés plus tard si tu tracks réellement les dégâts infligés)
+    Calcule :
+      - rates.rS_in / rates.rH_in : vitesses de perte du joueur (% fraction / s)
+      - pour chaque vaisseau v.rateShield_out / v.rateHull_out : vitesses de perte observée sur l'ennemi (% fraction / s)
+    Méthode :
+      - utilise les 2 derniers échantillons (timestamp, shield, hull)
+      - new_rate = max(0, (prev_value - last_value) / dt)
+      - applique EMA (alpha smoothing) avec la valeur précédente
+      - clamp entre 0 et max_rate
     """
-    global rates, joueur, ListVaisseaux
-    # valeurs de sécurité : si aucun dégât détecté, petites vitesses pour ne pas diviser par 0
-    rates.rS_in = 1e-6
-    rates.rH_in = 1e-6
+    global rates, joueur, ListVaisseaux, player_history, enemy_histories
 
-    # si tu veux, ici on pourrait estimer rS_in/rH_in en regardant les derniers events stockés
+    # paramètres internes (tuneables)
+    smoothing_alpha = 0.6   # EMA coefficient (0..1) : 1.0 = pas de lissage, 0.0 = conserver ancienne valeur
+    max_rate = 0.5          # cap raisonnable en fraction/s (50% de la barre par seconde)
+    min_dt = 0.02           # temps min entre deux samples pour considérer le delta (20 ms)
+    eps = DEFAULT_PARAMS.eps
+
+    # --- Joueur : calculer rS_in, rH_in à partir des 2 derniers échantillons ---
+    if len(player_history) >= 2:
+        prev_epoch, prev_shield, prev_hull = player_history[-2]
+        last_epoch, last_shield, last_hull = player_history[-1]
+        dt = last_epoch - prev_epoch
+        if dt >= min_dt:
+            shield_loss_rate = max(0.0, (prev_shield - last_shield) / dt)
+            hull_loss_rate = max(0.0, (prev_hull - last_hull) / dt)
+            # clamp
+            shield_loss_rate = min(shield_loss_rate, max_rate)
+            hull_loss_rate = min(hull_loss_rate, max_rate)
+            # EMA smoothing
+            rates.rS_in = smoothing_alpha * shield_loss_rate + (1.0 - smoothing_alpha) * rates.rS_in
+            rates.rH_in = smoothing_alpha * hull_loss_rate + (1.0 - smoothing_alpha) * rates.rH_in
+    # else garder les rates précédentes (ou valeurs par défaut)
+
+    # clamp safety
+    rates.rS_in = max(0.0, min(rates.rS_in, max_rate))
+    rates.rH_in = max(0.0, min(rates.rH_in, max_rate))
+
+    # --- Ennemis : pour chaque vaisseau, calculer la vitesse observée (dégâts subis) ---
     for v in ListVaisseaux:
-        # garde les rS_out/rH_out à 0.0 pour l'instant (les TTK seront grands -> menace calculée conservatrice)
-        if not hasattr(v, "rS_out"):
-            v.rS_out = 0.0
-        if not hasattr(v, "rH_out"):
-            v.rH_out = 0.0
+        hist = enemy_histories.get(v.nom)
+        if hist and len(hist) >= 2:
+            prev_epoch, prev_shield, prev_hull = hist[-2]
+            last_epoch, last_shield, last_hull = hist[-1]
+            dt = last_epoch - prev_epoch
+            if dt >= min_dt:
+                shield_loss_rate = max(0.0, (prev_shield - last_shield) / dt)
+                hull_loss_rate = max(0.0, (prev_hull - last_hull) / dt)
+                shield_loss_rate = min(shield_loss_rate, max_rate)
+                hull_loss_rate = min(hull_loss_rate, max_rate)
+                # EMA smoothing on per-vaisseau stored rates
+                v.rateShield_out = smoothing_alpha * shield_loss_rate + (1.0 - smoothing_alpha) * v.rateShield_out
+                v.rateHull_out = smoothing_alpha * hull_loss_rate + (1.0 - smoothing_alpha) * v.rateHull_out
+
+        # clamp safety
+        v.rateShield_out = max(0.0, min(v.rateShield_out, max_rate))
+        v.rateHull_out = max(0.0, min(v.rateHull_out, max_rate))
+
+    # debug optional
+    print(f"[DEBUG] rates.rS_in={rates.rS_in:.4f}, rates.rH_in={rates.rH_in:.4f}")
+    for v in ListVaisseaux:
+        print(f"[DEBUG] {v.nom}: rateShield_out={v.rateShield_out:.4f}, rateHull_out={v.rateHull_out:.4f}")
 
 
 def traitement():
-    # 1. mettre à jour vitesses (remplir rates.rH_in, rS_in, et rS_out/rH_out pour chaque vaisseau)
+    # 1. mettre à jour vitesses (remplir rates.rH_in, rS_in, et rateShield_out/rateHull_out pour chaque vaisseau)
     calcul_vitesse_degats()
 
     # 2. calcul du score de menace
@@ -266,7 +348,7 @@ def traitement():
 def menace(enemies, player, rates, params):
     """
     Calcul lisible et commenté du score de menace (0..100).
-    - enemies : liste d'objets Vaisseau (attributs attendus : PilotRank, ShipType, ShieldHealth, HullHealth, rS_out, rH_out)
+    - enemies : liste d'objets Vaisseau (attributs attendus : PilotRank, ShipType, ShieldHealth, HullHealth, rateShield_out, rateHull_out)
     - player  : objet Joueur (attributs attendus : shield_health, hull_health, shield_up)
     - rates   : structure Rates contenant rS_in (perte bouclier joueur %/s) et rH_in (perte coque joueur %/s)
     - params  : instance Params (paramètres réglables)
@@ -291,8 +373,8 @@ def menace(enemies, player, rates, params):
         hull_fraction = float(getattr(enemy, "HullHealth", 1.0))
 
         # nos mesures (dégâts QUE NOUS infligeons à cette cible, en %/s)
-        outgoing_shield_loss_rate = float(getattr(enemy, "rS_out", 0.0))
-        outgoing_hull_loss_rate = float(getattr(enemy, "rH_out", 0.0))
+        outgoing_shield_loss_rate = float(getattr(enemy, "rateShield_out", 0.0))
+        outgoing_hull_loss_rate = float(getattr(enemy, "rateHull_out", 0.0))
 
         enemies_info.append({
             "enemy_obj": enemy,
@@ -529,10 +611,10 @@ def monitor_journal(hud: CombatHUD):
             
             # Mise à jour des vaisseaux et du joueur
             if maj_vaisseau_ennemis:
-                maj_vaiseaux(nom_cible, PilotRank, ShieldHealth, HullHealth, ship_type, bounty)
+                maj_vaiseaux(nom_cible, PilotRank, ShieldHealth, HullHealth, ship_type, bounty, timestamp=time_stamp)
                 maj_vaisseau_ennemis = False
             if maj_vaisseau_joueur:
-                maj_joueur(player_hull_health, shield_up)
+                maj_joueur(player_hull_health, shield_up, timestamp=time_stamp)
                 maj_vaisseau_joueur = False
             
             # Calcul du score de menace et mise à jour du HUD
