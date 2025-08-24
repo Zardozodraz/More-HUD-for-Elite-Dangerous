@@ -53,6 +53,10 @@ class Params:
     # nouveaux réglages pour passif
     passive_base: float = 45.0    # base passive pour intrinsic=1
     passive_cap: float = 70.0     # cap maximal pour menace passive
+    
+    passive_hull_weight: float = 0.7   # importance relative de la coque dans eHP
+    passive_shield_weight: float = 0.3 # importance relative du bouclier dans eHP
+
 
 DEFAULT_PARAMS = Params()
 
@@ -115,8 +119,8 @@ class CombatHUD:
         extended_style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
         ctypes.windll.user32.SetWindowLongW(hwnd, -20, extended_style | 0x80000 | 0x20)
 
-    def update(self, bounty):
-        text_content = f"Bounty : {bounty}\n"
+    def update(self, menace):
+        text_content = f"Menace : {menace}\n"
 
         self.text.config(state="normal")
         self.text.delete("1.0", "end")
@@ -285,12 +289,31 @@ def menace(enemies, player, rates, params):
     if (not incoming_active) and (not outgoing_active):
         if N == 0:
             return 0.0
+
+        # calcul des normalisations (comme avant)
         avg_rank_norm = sum(((ei["obj"].PilotRank - 1) / 8.0) for ei in enemies_info) / N
         avg_ship_norm = sum(((ei["obj"].ShipType - 1) / 2.0) for ei in enemies_info) / N
         intrinsic = 0.7 * avg_rank_norm + 0.3 * avg_ship_norm  # 0..1
-        passive_score = intrinsic * params.passive_base * N
 
-        # léger bonus pour cibles lourdes / rangs extrêmes
+        # ---- nouveau : calcul eHP pondéré par w (danger intrinsèque) ----
+        hull_w = getattr(params, "passive_hull_weight", 0.7)
+        shield_w = getattr(params, "passive_shield_weight", 0.3)
+
+        sum_w = 0.0
+        sum_w_ehp = 0.0
+        for ei in enemies_info:
+            s = max(0.0, min(1.0, float(ei["s"])))  # clamp 0..1
+            h = max(0.0, min(1.0, float(ei["h"])))
+            ehp = hull_w * h + shield_w * s
+            sum_w += ei["w"]
+            sum_w_ehp += ei["w"] * ehp
+
+        weighted_ehp = (sum_w_ehp / sum_w) if sum_w > 0.0 else 0.0
+
+        # score passif de base (intrinsic * base * nombre de cibles * santé effective)
+        passive_score = intrinsic * params.passive_base * N * weighted_ehp
+
+        # léger bonus pour cibles lourdes / rangs extrêmes (garde-le si utile)
         heavy_bonus = 1.0
         if any(ei["obj"].ShipType == 3 for ei in enemies_info):
             heavy_bonus += 0.25
@@ -459,7 +482,7 @@ def monitor_journal(hud: CombatHUD):
             
             # Calcul du score de menace et mise à jour du HUD
             score = traitement()
-            hud.update(f"Menace : {score:.1f}")
+            hud.update(f"{score:.1f}")
 
 
 # ==================================== MAIN ====================================
