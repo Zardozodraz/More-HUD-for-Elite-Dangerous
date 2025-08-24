@@ -66,14 +66,16 @@ class Vaisseau:
         return f"{self.nom} ({self.PilotRank}), Bouclier: {self.ShieldHealth}, Coque: {self.HullHealth}, Type: {self.ShipType}, Bounty: {self.Bounty}"
 
 class Joueur:
-    def __init__(self, hull_health, shield_up):
-        self.hull_health = hull_health
-        self.shield_up = shield_up # bool
+    def __init__(self, hull_health=1.0, shield_up=True, shield_health=1.0):
+        # hull_health et shield_health attendus en [0..1]
+        self.hull_health = float(hull_health)
+        self.shield_up = bool(shield_up)
+        self.shield_health = float(shield_health)
 
     def __str__(self):
-        return f"Joueur - Santé: {self.hull_health}, Bouclier: {'Actif' if self.shield_up else 'Inactif'}"
+        return f"Joueur - Coque: {self.hull_health:.2f}, Bouclier: {self.shield_health:.2f} ({'Actif' if self.shield_up else 'Inactif'})"
 
-joueur = Joueur(1, True)  # Initialisation du joueur avec des valeurs par défaut
+joueur = Joueur(1.0, True, 1.0)
 
 # ==================================== HUD ====================================
 class CombatHUD:
@@ -146,30 +148,46 @@ def find_latest_journal():
 
 def maj_vaiseaux(nom_cible, PilotRank, ShieldHealth, HullHealth, ship_type, bounty):
     global ListVaisseaux
+    # normalisation en 0..1 si l'input est en pourcentage (>1)
+    try:
+        sh = float(ShieldHealth)
+        hu = float(HullHealth)
+        if sh > 1.0:
+            sh = sh / 100.0
+        if hu > 1.0:
+            hu = hu / 100.0
+    except (TypeError, ValueError):
+        sh, hu = 1.0, 1.0
+
     is_modified = False
-    # Fonction pour créer un vaisseau à partir des données du journal
     for i in range(len(ListVaisseaux)):
         if ListVaisseaux[i].nom == nom_cible:
-            # Si le vaisseau existe déjà, on met à jour ses informations
             ListVaisseaux[i].PilotRank = PilotRank
-            ListVaisseaux[i].ShieldHealth = ShieldHealth
-            ListVaisseaux[i].HullHealth = HullHealth
+            ListVaisseaux[i].ShieldHealth = sh
+            ListVaisseaux[i].HullHealth = hu
             ListVaisseaux[i].ShipType = ship_type
             ListVaisseaux[i].Bounty = bounty
             is_modified = True
             print(f"Vaisseau mis à jour : {ListVaisseaux[i]}")
-        
     if not is_modified:
-        # Si le vaisseau n'existe pas, on le crée et l'ajoute à la liste
-        vaisseau = Vaisseau(nom_cible, PilotRank, ShieldHealth, HullHealth, ship_type, bounty)
+        vaisseau = Vaisseau(nom_cible, PilotRank, sh, hu, ship_type, bounty)
         ListVaisseaux.append(vaisseau)
-        print(f"Nouveau vaisseau détecté : {nom_cible} ({PilotRank}), Bouclier: {ShieldHealth}, Coque: {HullHealth}, Type: {ship_type}, Bounty: {bounty}")
+        print(f"Nouveau vaisseau détecté : {vaisseau}")
+
 
 def maj_joueur(hull_health, shield_up):
-    # Fonction pour mettre à jour les informations du joueur
     global joueur
-    joueur.hull_health = hull_health
-    joueur.shield_up = shield_up
+    # normalize hull
+    try:
+        h = float(hull_health)
+        if h > 1.0:
+            h = h / 100.0
+    except (TypeError, ValueError):
+        h = 1.0
+    joueur.hull_health = h
+    joueur.shield_up = bool(shield_up)
+    # best-effort pour shield_health : si shield_up True, assume 1.0 (on ne reçoit pas la valeur exacte)
+    joueur.shield_health = 1.0 if joueur.shield_up else 0.0
     print(f"Joueur mis à jour : {joueur}")
 
 def cible_detruite(nom_cible_detruite):
@@ -184,21 +202,32 @@ def cible_detruite(nom_cible_detruite):
 # ==================================== TRAITEMENT ====================================
 
 def parse_timestamp(timestamp):
-    """Parse le timestamp du journal et retourne une durée."""
-    
     dt = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%SZ")
     minutes = dt.minute
     secondes = dt.second
-    dt = (minutes, secondes)
-    print(f"[INFO] Timestamp analysé : minutes: {dt[0]}, secondes: {dt(1)})")
-    
-    return dt
+    print(f"[INFO] Timestamp analysé : minutes: {minutes}, secondes: {secondes}")
+    return (minutes, secondes)
+
 
 def calcul_vitesse_degats():
-    """Calcul la vitesse de destruction des boucliers et de la coque du joueur et des ennemis en fonction du timestamp."""
-    global joueur, ListVaisseaux
-    
-    pass
+    """
+    Implémentation minimale :
+    - évite les divisions par zéro en donnant des petits taux par défaut
+    - laisse les r*_out des vaisseaux à 0.0 (ils seront remplacés plus tard si tu tracks réellement les dégâts infligés)
+    """
+    global rates, joueur, ListVaisseaux
+    # valeurs de sécurité : si aucun dégât détecté, petites vitesses pour ne pas diviser par 0
+    rates.rS_in = 1e-6
+    rates.rH_in = 1e-6
+
+    # si tu veux, ici on pourrait estimer rS_in/rH_in en regardant les derniers events stockés
+    for v in ListVaisseaux:
+        # garde les rS_out/rH_out à 0.0 pour l'instant (les TTK seront grands -> menace calculée conservatrice)
+        if not hasattr(v, "rS_out"):
+            v.rS_out = 0.0
+        if not hasattr(v, "rH_out"):
+            v.rH_out = 0.0
+
 
 def traitement():
     # 1. mettre à jour vitesses (remplir rates.rH_in, rS_in, et rS_out/rH_out pour chaque vaisseau)
@@ -218,33 +247,43 @@ def traitement():
 
 
 def menace(enemies, player, rates, params):
-    eps = 1e-3
-    # TTD joueur
-    S, H, U = player.S, player.H, player.shield_up  # [0..1], bool
-    rSi, rHi = max(eps, rates.rS_in), max(eps, rates.rH_in)
-    TTD = (U*S)/rSi + H/rHi
+    eps = params.eps if hasattr(params, "eps") else 1e-3
 
-    # TTK effectif
+    # Récupération valeurs joueur (normalisées [0..1])
+    S = getattr(player, "shield_health", 1.0)   # float 0..1
+    H = getattr(player, "hull_health", 1.0)     # float 0..1
+    U = getattr(player, "shield_up", False)     # bool
+
+    rSi, rHi = max(eps, rates.rS_in), max(eps, rates.rH_in)
+    TTD = (U * S) / rSi + H / rHi
+
+    # TTK effectif : on adapte les noms aux attributs de Vaisseau
     TTKs = []
     for e in enemies:
-        r_star = (e.rank-1)/8.0
-        t_star = (e.ship-1)/2.0
-        w = 1 + params.lmbd * (0.6*r_star + 0.4*t_star)
+        # PilotRank -> 1..9 ; ShipType -> 1..3
+        r_star = (getattr(e, "PilotRank", 1) - 1) / 8.0
+        t_star = (getattr(e, "ShipType", 1) - 1) / 2.0
+        w = 1 + params.lmbd * (0.6 * r_star + 0.4 * t_star)
 
-        rSo = max(eps, e.rS_out)  # 0 si non ciblé, sinon valeur mesurée
-        rHo = max(eps, e.rH_out)
-        TTKs.append(w * (e.s / rSo + e.h / rHo))
+        s = getattr(e, "ShieldHealth", 1.0)
+        h = getattr(e, "HullHealth", 1.0)
+
+        rSo = max(eps, getattr(e, "rS_out", eps))
+        rHo = max(eps, getattr(e, "rH_out", eps))
+
+        TTKs.append(w * (s / rSo + h / rHo))
+
     TTK_eff = min(TTKs) if TTKs else 0.0
 
     # Contexte
     N = len(enemies)
-    C = 1 + params.delta * ((N-1) / (1 + (N-1)/params.kappa))
-    Vp = (1 + params.alpha*(1-int(U))) * (1 + params.beta*max(0.0, (0.5-H)/0.5))
+    C = 1 + params.delta * ((N - 1) / (1 + (N - 1) / params.kappa))
+    Vp = (1 + params.alpha * (1 - int(U))) * (1 + params.beta * max(0.0, (0.5 - H) / 0.5))
 
     R = (TTK_eff / max(eps, TTD)) * C * Vp
-    menace = 100.0 * (1.0 / (1.0 + math.exp(-params.g*(R-1.0))))
-    print("Menace calculée :", menace)
-    return max(0.0, min(100.0, menace))  # Clamp entre 0 et 100
+    menace_score = 100.0 * (1.0 / (1.0 + math.exp(-params.g * (R - 1.0))))
+    print("Menace calculée :", menace_score)
+    return max(0.0, min(100.0, menace_score))  # Clamp entre 0 et 100
 
 # ==================================== SURVEILLANCE DU JOURNAL ====================================
 def monitor_journal(hud: CombatHUD):
