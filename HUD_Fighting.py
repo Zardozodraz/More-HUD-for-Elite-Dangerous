@@ -25,9 +25,31 @@ import tkinter as tk
 from pathlib import Path
 from string import ascii_uppercase
 from datetime import datetime
+from dataclasses import dataclass
+import math
 
 ListVaisseaux = []  # Liste globale pour stocker les vaisseaux détectés
 
+@dataclass
+class Rates:
+    rS_in: float = 0.0   # perte bouclier joueur (%/s) si mesurable, sinon 0
+    rH_in: float = 1e-6  # perte coque joueur (%/s), évite la division par 0
+    
+rates = Rates()
+
+@dataclass(frozen=True)
+class Params:
+    lmbd: float = 1.5   # coefficient pour le poids intrinsèque des ennemis
+    delta: float = 0.7  # force de l'effet de surnombre
+    kappa: float = 3.0  # saturation pour l'effet de surnombre
+    alpha: float = 0.4  # malus si bouclier du joueur désactivé
+    beta: float = 0.6   # malus si coque < 50%
+    g: float = 3.0      # "gain" de la sigmoïde (sensibilité)
+    eps: float = 1e-3   # epsilon anti-division par zéro
+
+DEFAULT_PARAMS = Params()  # DEFAULT_PARAMS = {"lmbd":1.5, "delta":0.7, "kappa":3.0, "alpha":0.4, "beta":0.6, "g":3.0, "eps":1e-3}
+
+# ==================================== SHIPs CLASSES ====================================
 class Vaisseau:
     def __init__(self, nom_cible, PilotRank, ShieldHealth, HullHealth, ship_type, bounty):
         self.nom = nom_cible
@@ -36,6 +58,9 @@ class Vaisseau:
         self.HullHealth = HullHealth
         self.ShipType = ship_type
         self.Bounty = bounty
+        
+        self.rS_out = 0.0
+        self.rH_out = 0.0
 
     def __str__(self):
         return f"{self.nom} ({self.PilotRank}), Bouclier: {self.ShieldHealth}, Coque: {self.HullHealth}, Type: {self.ShipType}, Bounty: {self.Bounty}"
@@ -176,24 +201,50 @@ def calcul_vitesse_degats():
     pass
 
 def traitement():
-    global joueur, ListVaisseaux
-    menace = 0  # Niveau de menace initial
-    # Fonction de traitement des données du journal
-    if not ListVaisseaux:
-        print("[INFO] Aucune cible détectée.")
-        menace = 0
-        return
-    else:
-        nombre_cible = len(ListVaisseaux)
-        for i in range(nombre_cible):
-            vaisseau = ListVaisseaux[i]
-            print(f"[INFO] Cible détectée : {vaisseau.nom} ({vaisseau.PilotRank}), Bouclier: {vaisseau.ShieldHealth}, Coque: {vaisseau.HullHealth}, Type: {vaisseau.ShipType}, Bounty: {vaisseau.Bounty}")
-            formule_menace = 0.5 * vaisseau.ShieldHealth + 0.3 * vaisseau.HullHealth + 0.7 * vaisseau.PilotRank + 0.6 * vaisseau.ShipType + nombre_cible * 0.2
-            menace += formule_menace
-        
-        malus_joueur = 0.5 * joueur.hull_health + 0.3 * joueur.shield_up
-        menace += malus_joueur
-        print(f"[INFO] Niveau de menace calculé : {menace}")
+    # 1. mettre à jour vitesses (remplir rates.rH_in, rS_in, et rS_out/rH_out pour chaque vaisseau)
+    calcul_vitesse_degats()
+
+    # 2. calcul du score de menace
+    global rates
+    score = menace(
+        enemies=ListVaisseaux,
+        player=joueur,
+        rates=rates,
+        params=DEFAULT_PARAMS
+    )
+
+    # 3. renvoyer le score
+    return score
+
+
+def menace(enemies, player, rates, params):
+    eps = 1e-3
+    # TTD joueur
+    S, H, U = player.S, player.H, player.shield_up  # [0..1], bool
+    rSi, rHi = max(eps, rates.rS_in), max(eps, rates.rH_in)
+    TTD = (U*S)/rSi + H/rHi
+
+    # TTK effectif
+    TTKs = []
+    for e in enemies:
+        r_star = (e.rank-1)/8.0
+        t_star = (e.ship-1)/2.0
+        w = 1 + params.lmbd * (0.6*r_star + 0.4*t_star)
+
+        rSo = max(eps, e.rS_out)  # 0 si non ciblé, sinon valeur mesurée
+        rHo = max(eps, e.rH_out)
+        TTKs.append(w * (e.s / rSo + e.h / rHo))
+    TTK_eff = min(TTKs) if TTKs else 0.0
+
+    # Contexte
+    N = len(enemies)
+    C = 1 + params.delta * ((N-1) / (1 + (N-1)/params.kappa))
+    Vp = (1 + params.alpha*(1-int(U))) * (1 + params.beta*max(0.0, (0.5-H)/0.5))
+
+    R = (TTK_eff / max(eps, TTD)) * C * Vp
+    menace = 100.0 * (1.0 / (1.0 + math.exp(-params.g*(R-1.0))))
+    print("Menace calculée :", menace)
+    return max(0.0, min(100.0, menace))  # Clamp entre 0 et 100
 
 # ==================================== SURVEILLANCE DU JOURNAL ====================================
 def monitor_journal(hud: CombatHUD):
@@ -323,6 +374,11 @@ def monitor_journal(hud: CombatHUD):
             if maj_vaisseau_joueur:
                 maj_joueur(player_hull_health, shield_up)
                 maj_vaisseau_joueur = False
+            
+            # Calcul du score de menace et mise à jour du HUD
+            score = traitement()
+            hud.update(f"Menace : {score:.1f}")
+
 
 # ==================================== MAIN ====================================
 def main():
