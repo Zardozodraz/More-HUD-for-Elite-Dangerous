@@ -39,23 +39,29 @@ rates = Rates()
 
 @dataclass(frozen=True)
 class Params:
-    lmbd: float = 1.5
-    delta: float = 0.7
-    kappa: float = 3.0
-    alpha: float = 0.4
-    beta: float = 0.6
-    g: float = 3.0
-    eps: float = 1e-3
+    """
+    Paramètres globaux pour le calcul de menace.
+    Ajuste ces valeurs pour régler la sensibilité / le comportement.
+    """
+    lmbd: float = 1.5            # force du poids intrinsèque (rank/ship)
+    delta: float = 0.7           # intensité de l'effet de surnombre
+    kappa: float = 3.0           # saturation pour l'effet de surnombre
+    alpha: float = 0.4           # malus si bouclier joueur désactivé
+    beta: float = 0.6            # malus si coque joueur < 50%
+    g: float = 3.0               # gain de la sigmoïde (sensibilité autour de R=1)
+    eps: float = 1e-3            # epsilon anti-division par zéro
 
+    # détection "combat actif" (seuils en fraction %/s, ex: 0.005 = 0.5%/s)
     combat_threshold_in: float = 0.005
     combat_threshold_out: float = 0.005
 
-    # nouveaux réglages pour passif
-    passive_base: float = 45.0    # base passive pour intrinsic=1
-    passive_cap: float = 70.0     # cap maximal pour menace passive
-    
-    passive_hull_weight: float = 0.7   # importance relative de la coque dans eHP
-    passive_shield_weight: float = 0.3 # importance relative du bouclier dans eHP
+    # paramètres pour menace passive (quand aucun tir n'est détecté)
+    passive_base: float = 45.0         # base (pour intrinsic=1.0 et 1 ennemi full HP)
+    passive_cap: float = 70.0          # plafond pour la menace passive
+
+    # pondération pour eHP = hull_weight * hull + shield_weight * shield
+    passive_hull_weight: float = 0.7
+    passive_shield_weight: float = 0.3
 
 
 DEFAULT_PARAMS = Params()
@@ -258,97 +264,146 @@ def traitement():
 
 
 def menace(enemies, player, rates, params):
-    eps = params.eps
+    """
+    Calcul lisible et commenté du score de menace (0..100).
+    - enemies : liste d'objets Vaisseau (attributs attendus : PilotRank, ShipType, ShieldHealth, HullHealth, rS_out, rH_out)
+    - player  : objet Joueur (attributs attendus : shield_health, hull_health, shield_up)
+    - rates   : structure Rates contenant rS_in (perte bouclier joueur %/s) et rH_in (perte coque joueur %/s)
+    - params  : instance Params (paramètres réglables)
+    """
 
-    # --- 1) construire infos ennemis + poids w ---
+    eps = params.eps  # sécurité
+
+    # -------------------------
+    # 1) Préparer les informations par ennemi (noms explicites)
+    # -------------------------
     enemies_info = []
-    for e in enemies:
-        r_star = (getattr(e, "PilotRank", 1) - 1) / 8.0
-        t_star = (getattr(e, "ShipType", 1) - 1) / 2.0
-        w = 1.0 + params.lmbd * (0.6 * r_star + 0.4 * t_star)
+    for enemy in enemies:
+        # normalisations pour rang/type
+        rank_norm = (getattr(enemy, "PilotRank", 1) - 1) / 8.0   # 0 to 1
+        ship_norm = (getattr(enemy, "ShipType", 1) - 1) / 2.0    # 0 to 1
 
-        s = getattr(e, "ShieldHealth", 1.0)
-        h = getattr(e, "HullHealth", 1.0)
+        # poids intrinsèque de la cible (plus élevé = cible plus "importante")
+        intrinsic_weight = 1.0 + params.lmbd * (0.6 * rank_norm + 0.4 * ship_norm)
 
-        # valeurs brutes de DPS sortant (peuvent être 0 si on ne tire pas)
-        rSo_raw = getattr(e, "rS_out", 0.0)
-        rHo_raw = getattr(e, "rH_out", 0.0)
+        # état courant de la cible (fract. 0 to 1)
+        shield_fraction = float(getattr(enemy, "ShieldHealth", 1.0))
+        hull_fraction = float(getattr(enemy, "HullHealth", 1.0))
+
+        # nos mesures (dégâts QUE NOUS infligeons à cette cible, en %/s)
+        outgoing_shield_loss_rate = float(getattr(enemy, "rS_out", 0.0))
+        outgoing_hull_loss_rate = float(getattr(enemy, "rH_out", 0.0))
 
         enemies_info.append({
-            "obj": e, "w": w, "s": s, "h": h,
-            "rSo_raw": float(rSo_raw), "rHo_raw": float(rHo_raw)
+            "enemy_obj": enemy,
+            "rank_norm": rank_norm,
+            "ship_norm": ship_norm,
+            "intrinsic_weight": intrinsic_weight,
+            "shield_fraction": shield_fraction,
+            "hull_fraction": hull_fraction,
+            "outgoing_shield_loss_rate": outgoing_shield_loss_rate,
+            "outgoing_hull_loss_rate": outgoing_hull_loss_rate
         })
 
-    N = len(enemies_info)
+    number_of_enemies = len(enemies_info)
 
-    # --- 2) détecter si combat actif (basé sur seuils, non sur clamp pour les divisions) ---
+    # -------------------------
+    # 2) Détecter si le combat est "actif"
+    #    - incoming_active : on subit des pertes (bouclier / coque)
+    #    - outgoing_active : on inflige des pertes mesurables à au moins une cible
+    # -------------------------
     incoming_active = (rates.rS_in > params.combat_threshold_in) or (rates.rH_in > params.combat_threshold_in)
-    outgoing_active = any((ei["rSo_raw"] > params.combat_threshold_out) or (ei["rHo_raw"] > params.combat_threshold_out) for ei in enemies_info)
+    outgoing_active = any(
+        (ei["outgoing_shield_loss_rate"] > params.combat_threshold_out) or
+        (ei["outgoing_hull_loss_rate"] > params.combat_threshold_out)
+        for ei in enemies_info
+    )
 
-    # --- 3) état passif (aucun dégât entrant ni sortant) : menace faible basée sur rang/nb ---
+    # -------------------------
+    # 3) Mode PASSIF (personne ne tire ou pas de données de dps) :
+    #    -> menace dépend du rang, type, du nombre d'ennemis et de leur santé effective (eHP).
+    # -------------------------
     if (not incoming_active) and (not outgoing_active):
-        if N == 0:
+        if number_of_enemies == 0:
             return 0.0
 
-        # calcul des normalisations (comme avant)
-        avg_rank_norm = sum(((ei["obj"].PilotRank - 1) / 8.0) for ei in enemies_info) / N
-        avg_ship_norm = sum(((ei["obj"].ShipType - 1) / 2.0) for ei in enemies_info) / N
-        intrinsic = 0.7 * avg_rank_norm + 0.3 * avg_ship_norm  # 0..1
+        # normalisations moyennes rank/ship (0..1)
+        avg_rank_norm = sum(ei["rank_norm"] for ei in enemies_info) / number_of_enemies
+        avg_ship_norm = sum(ei["ship_norm"] for ei in enemies_info) / number_of_enemies
+        intrinsic_index = 0.7 * avg_rank_norm + 0.3 * avg_ship_norm   # 0..1 (rang priorisé)
 
-        # ---- nouveau : calcul eHP pondéré par w (danger intrinsèque) ----
-        hull_w = getattr(params, "passive_hull_weight", 0.7)
-        shield_w = getattr(params, "passive_shield_weight", 0.3)
+        # eHP pondéré par intrinsic_weight : meilleure représentation de "combien il reste de menace"
+        hull_w = params.passive_hull_weight
+        shield_w = params.passive_shield_weight
 
-        sum_w = 0.0
-        sum_w_ehp = 0.0
+        total_weight = 0.0
+        total_weighted_ehp = 0.0
         for ei in enemies_info:
-            s = max(0.0, min(1.0, float(ei["s"])))  # clamp 0..1
-            h = max(0.0, min(1.0, float(ei["h"])))
-            ehp = hull_w * h + shield_w * s
-            sum_w += ei["w"]
-            sum_w_ehp += ei["w"] * ehp
+            shield_clamped = max(0.0, min(1.0, ei["shield_fraction"]))
+            hull_clamped = max(0.0, min(1.0, ei["hull_fraction"]))
+            effective_hp = hull_w * hull_clamped + shield_w * shield_clamped
+            w = ei["intrinsic_weight"]
+            total_weight += w
+            total_weighted_ehp += w * effective_hp
 
-        weighted_ehp = (sum_w_ehp / sum_w) if sum_w > 0.0 else 0.0
+        weighted_ehp = (total_weighted_ehp / total_weight) if total_weight > 0.0 else 0.0
 
-        # score passif de base (intrinsic * base * nombre de cibles * santé effective)
-        passive_score = intrinsic * params.passive_base * N * weighted_ehp
+        # score passif brut (avant bonus)
+        passive_score = intrinsic_index * params.passive_base * number_of_enemies * weighted_ehp
 
-        # léger bonus pour cibles lourdes / rangs extrêmes (garde-le si utile)
+        # bonus léger si présence de vaisseaux lourds ou rang très élevé
         heavy_bonus = 1.0
-        if any(ei["obj"].ShipType == 3 for ei in enemies_info):
+        if any(ei["enemy_obj"].ShipType == 3 for ei in enemies_info):
             heavy_bonus += 0.25
-        if any(ei["obj"].PilotRank >= 8 for ei in enemies_info):
+        if any(ei["enemy_obj"].PilotRank >= 8 for ei in enemies_info):
             heavy_bonus += 0.15
         passive_score *= heavy_bonus
 
+        # clamp et retour
         passive_score = max(0.0, min(params.passive_cap, passive_score))
         return passive_score
 
-    # --- 4) combat actif : calcul TTD / TTK comme avant (mais en utilisant r*_raw clamped pour divisions) ---
-    S = getattr(player, "shield_health", 1.0)
-    H = getattr(player, "hull_health", 1.0)
-    U = getattr(player, "shield_up", False)
+    # -------------------------
+    # 4) Mode ACTIF (combat en cours) : calcul Time-To-Die (joueur) vs Time-To-Kill (ennemis)
+    # -------------------------
+    # Etat du joueur (fractions 0..1)
+    player_shield_fraction = getattr(player, "shield_health", 1.0)
+    player_hull_fraction = getattr(player, "hull_health", 1.0)
+    shield_is_up = bool(getattr(player, "shield_up", False))
+    
+    if not shield_is_up:
+        player_shield_fraction = 0.0
 
-    rSi = max(eps, float(rates.rS_in))
-    rHi = max(eps, float(rates.rH_in))
-    TTD = (U * S) / rSi + H / rHi
+    # vitesses de perte entrantes (ce qu'on subit) — clamp pour éviter div par 0
+    incoming_shield_loss_rate = max(eps, float(rates.rS_in))
+    incoming_hull_loss_rate = max(eps, float(rates.rH_in))
 
-    TTKs = []
+    # temps estimé avant destruction du joueur (en secondes arbitraires sur la base de %/s)
+    time_to_die = (shield_is_up * player_shield_fraction) / incoming_shield_loss_rate + player_hull_fraction / incoming_hull_loss_rate
+
+    # calcul du Time-To-Kill pour chaque ennemi (avec clamp des dps sortants)
+    time_to_kill_list = []
     for ei in enemies_info:
-        w = ei["w"]
-        s = ei["s"]
-        h = ei["h"]
-        rSo = max(eps, ei["rSo_raw"])
-        rHo = max(eps, ei["rHo_raw"])
-        TTKs.append(w * (s / rSo + h / rHo))
+        out_shield_rate = max(eps, ei["outgoing_shield_loss_rate"])
+        out_hull_rate = max(eps, ei["outgoing_hull_loss_rate"])
+        # TTK pondéré par le poids intrinsèque de la cible
+        ttk = ei["intrinsic_weight"] * (ei["shield_fraction"] / out_shield_rate + ei["hull_fraction"] / out_hull_rate)
+        time_to_kill_list.append(ttk)
 
-    TTK_eff = min(TTKs) if TTKs else 0.0
+    effective_time_to_kill = min(time_to_kill_list) if time_to_kill_list else 0.0
 
-    C = 1.0 + params.delta * ((N - 1.0) / (1.0 + (N - 1.0) / params.kappa))
-    Vp = (1.0 + params.alpha * (1 - int(bool(U)))) * (1.0 + params.beta * max(0.0, (0.5 - H) / 0.5))
+    # effet surnombre (sature grâce à kappa)
+    crowd_factor = 1.0 + params.delta * ((number_of_enemies - 1.0) / (1.0 + (number_of_enemies - 1.0) / params.kappa))
 
-    R = (TTK_eff / max(eps, TTD)) * C * Vp
-    menace_score = 100.0 * (1.0 / (1.0 + math.exp(-params.g * (R - 1.0))))
+    # vulnérabilité du joueur (malus si bouclier off, ou coque faible)
+    player_vulnerability = (1.0 + params.alpha * (1 - int(bool(shield_is_up)))) * (1.0 + params.beta * max(0.0, (0.5 - player_hull_fraction) / 0.5))
+
+    # ratio final (TTK / TTD) modulé par contexte
+    ratio = (effective_time_to_kill / max(eps, time_to_die)) * crowd_factor * player_vulnerability
+
+    # compressé via sigmoïde centrée en ratio=1 pour obtenir 0..100 lisible
+    menace_score = 100.0 * (1.0 / (1.0 + math.exp(-params.g * (ratio - 1.0))))
+    # clamp final et retour
     return max(0.0, min(100.0, menace_score))  # Clamp entre 0 et 100
 
 # ==================================== SURVEILLANCE DU JOURNAL ====================================
