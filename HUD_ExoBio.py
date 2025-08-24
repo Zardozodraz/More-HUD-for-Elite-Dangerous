@@ -94,6 +94,8 @@ class ExoBioHUD:
         run(): Starts the Tkinter main loop.
     """
     
+    TRANSPARENT_COLOR = "#000000"  # couleur unique utilisée comme "colorkey"
+    
     def __init__(self, fenetreDecalee="False"):
         """
         Initializes the HUD window with transparent background and non-interactive settings.
@@ -102,11 +104,15 @@ class ExoBioHUD:
         self.root = tk.Tk()
         self.root.title("HUD Exo-Biology")
         self.root.geometry(f"{round(largeur * 0.26)}x{round(hauteur * 0.26)}+10+10") # "500x500+10+10"
-        self.root.configure(bg="black")
+        self.root.configure(bg=self.TRANSPARENT_COLOR)
         self.root.wm_attributes("-topmost", True)
-        self.root.attributes("-alpha", 0.85)
-        #self.root.wm_attributes("-transparentcolor", "black")
+        # Important : ne PAS définir -alpha si vous voulez utiliser -transparentcolor
         self.root.overrideredirect(True)
+        self.root.wm_attributes("-topmost", True)
+
+        # utiliser une couleur spécifique et unique comme couleur transparente
+        self.root.configure(bg=self.TRANSPARENT_COLOR)
+        self.root.wm_attributes("-transparentcolor", self.TRANSPARENT_COLOR)
         
         if fenetreDecalee == "True": # si le HUD des systèmes est lancé (avant)
             self.root.geometry(f"{round(largeur * 0.26)}x{round(hauteur * 0.26)}+10+{round(hauteur * 0.1) + 20}") # "500x500+10+120"
@@ -114,7 +120,7 @@ class ExoBioHUD:
         self.text = tk.Text(
             self.root,
             fg="lime",
-            bg="black",
+            bg=self.TRANSPARENT_COLOR,
             font=("Consolas", 12, "bold"),
             wrap="word",
             state="disabled",
@@ -125,17 +131,28 @@ class ExoBioHUD:
 
         self.make_click_through()
 
+    def _hex_to_colorref(self, hex_color: str) -> int:
+        h = hex_color.lstrip("#")
+        r = int(h[0:2], 16)
+        g = int(h[2:4], 16)
+        b = int(h[4:6], 16)
+        # COLORREF = 0x00BBGGRR (Windows uses low bytes for R,G,B ordering in this packing)
+        return r | (g << 8) | (b << 16)
+
     def make_click_through(self):
-        hwnd = self.root.winfo_id()  # pas de GetParent
+        hwnd = self.root.winfo_id()
         GWL_EXSTYLE = -20
-        WS_EX_LAYERED = 0x80000
-        WS_EX_TRANSPARENT = 0x20
+        WS_EX_LAYERED = 0x00080000
+        WS_EX_TRANSPARENT = 0x00000020
 
         style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
         ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED | WS_EX_TRANSPARENT)
 
-        # Forcer la transparence (255 = opaque mais click-through activé)
-        ctypes.windll.user32.SetLayeredWindowAttributes(hwnd, 0, 255, 0x2)
+        # Optionnel — forcer la clé couleur côté WinAPI (LWA_COLORKEY = 0x1)
+        colorref = self._hex_to_colorref(self.TRANSPARENT_COLOR)
+        LWA_COLORKEY = 0x1
+        # crKey, bAlpha (ignored for LWA_COLORKEY), dwFlags
+        ctypes.windll.user32.SetLayeredWindowAttributes(hwnd, colorref, 0, LWA_COLORKEY)
 
     def update(self, system, body_list, docked, use_save):
         """

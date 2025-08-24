@@ -360,7 +360,7 @@ def run():
                     texte_4_rect = texte_4.get_rect(center=(button4_rect.centerx, button4_rect.centery))
                     
                 
-                if button_InterestingTypes_x <= x <= (button_InterestingTypes_x + button_InterestingTypes_width) and button_InterestingTypes_y <= y <= (button_InterestingTypes_y + button_InterestingTypes_height) and not HUD_Systeme_running:
+                if button_InterestingTypes_x <= x <= (button_InterestingTypes_x + button_InterestingTypes_width) and button_InterestingTypes_y <= y <= (button_InterestingTypes_y + button_InterestingTypes_height):
                     print("Button InterestingTypes clicked")
                     Choose_Interesting()
                     
